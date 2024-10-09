@@ -7,7 +7,9 @@
 #include "TracyImGui.hpp"
 #include "TracyMouse.hpp"
 #include "TracyPrint.hpp"
+#include "TracySort.hpp"
 #include "TracyView.hpp"
+#include "tracy_pdqsort.h"
 
 namespace tracy
 {
@@ -263,8 +265,23 @@ void View::DrawFindZone()
 #else
     if( !m_worker.AreSourceLocationZonesReady() )
     {
-        ImGui::TextWrapped( "Please wait, computing data..." );
+        const auto ty = ImGui::GetTextLineHeight();
+        ImGui::PushFont( m_bigFont );
+        ImGui::Dummy( ImVec2( 0, ( ImGui::GetContentRegionAvail().y - ImGui::GetTextLineHeight() * 2 - ty ) * 0.5f ) );
+        TextCentered( ICON_FA_CROW );
+        TextCentered( "Please wait, computing data..." );
+        ImGui::PopFont();
         DrawWaitingDots( s_time );
+        ImGui::End();
+        return;
+    }
+    if( m_worker.GetZoneCount() == 0 )
+    {
+        ImGui::PushFont( m_bigFont );
+        ImGui::Dummy( ImVec2( 0, ( ImGui::GetContentRegionAvail().y - ImGui::GetTextLineHeight() * 2 ) * 0.5f ) );
+        TextCentered( ICON_FA_CROW );
+        TextCentered( "No zones were collected" );
+        ImGui::PopFont();
         ImGui::End();
         return;
     }
@@ -507,10 +524,10 @@ void View::DrawFindZone()
                     }
                 }
                 auto mid = vec.begin() + vszorig;
-#ifdef NO_PARALLEL_SORT
+#ifdef __EMSCRIPTEN__
                 pdqsort_branchless( mid, vec.end() );
 #else
-                std::sort( std::execution::par_unseq, mid, vec.end() );
+                ppqsort::sort( ppqsort::execution::par, mid, vec.end() );
 #endif
                 std::inplace_merge( vec.begin(), mid, vec.end() );
 

@@ -5,8 +5,7 @@
 #include <EGL/eglext.h>
 #include <GLES2/gl2.h>
 #include <emscripten/html5.h>
-
-#include "imgui/imgui_impl_opengl3.h"
+#include <backends/imgui_impl_opengl3.h>
 
 #include "Backend.hpp"
 #include "RunQueue.hpp"
@@ -21,7 +20,7 @@ static EGLDisplay s_eglDpy;
 static EGLContext s_eglCtx;
 static EGLSurface s_eglSurf;
 
-static float s_prevScale;
+static float s_prevScale = -1;
 static int s_width, s_height;
 static uint64_t s_time;
 static const char* s_prevCursor = nullptr;
@@ -200,6 +199,16 @@ Backend::Backend( const char* title, const std::function<void()>& redraw, const 
         tracy::s_wasActive = true;
         return EM_TRUE;
     } );
+    emscripten_set_mouseleave_callback( "#canvas", nullptr, EM_TRUE, []( int, const EmscriptenMouseEvent*, void* ) -> EM_BOOL {
+        ImGui::GetIO().AddFocusEvent( false );
+        tracy::s_wasActive = true;
+        return EM_TRUE;
+    } );
+    emscripten_set_mouseenter_callback( "#canvas", nullptr, EM_TRUE, []( int, const EmscriptenMouseEvent*, void* ) -> EM_BOOL {
+        ImGui::GetIO().AddFocusEvent( true );
+        tracy::s_wasActive = true;
+        return EM_TRUE;
+    } );
     emscripten_set_wheel_callback( "#canvas", nullptr, EM_TRUE, []( int, const EmscriptenWheelEvent* e, void* ) -> EM_BOOL {
         ImGui::GetIO().AddMouseWheelEvent( e->deltaX * -0.05, e->deltaY * -0.05 );
         tracy::s_wasActive = true;
@@ -219,7 +228,6 @@ Backend::Backend( const char* title, const std::function<void()>& redraw, const 
         return EM_TRUE;
     } );
 
-    s_prevScale = GetDpiScale();
     s_time = std::chrono::duration_cast<std::chrono::microseconds>( std::chrono::high_resolution_clock::now().time_since_epoch() ).count();
 }
 

@@ -6,13 +6,16 @@ on:
   pull_request:
     branches: [ master ]
 
+env:
+  CPM_SOURCE_CACHE: ${{ github.workspace }}/cpm-cache
+
 jobs:
   build:
     runs-on: ubuntu-latest
     container: archlinux:base-devel
     steps:
     - name: Install dependencies
-      run: pacman -Syu --noconfirm && pacman -S --noconfirm --needed freetype2 tbb debuginfod wayland dbus libxkbcommon libglvnd meson cmake git wayland-protocols nodejs
+      run: pacman -Syu --noconfirm && pacman -S --noconfirm --needed freetype2 debuginfod wayland dbus libxkbcommon libglvnd meson cmake git wayland-protocols nodejs
     - name: Trust git repo
       run: git config --global --add safe.directory '*'
     - uses: actions/checkout@v4

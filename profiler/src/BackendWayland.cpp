@@ -1,8 +1,7 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
-
-#include "imgui/imgui_impl_opengl3.h"
-#include "imgui/imgui_impl_opengl3_loader.h"
+#include <backends/imgui_impl_opengl3.h>
+#include <backends/imgui_impl_opengl3_loader.h>
 
 #include <chrono>
 #include <linux/input-event-codes.h>
@@ -223,7 +222,7 @@ struct Output
 };
 static std::unordered_map<uint32_t, std::unique_ptr<Output>> s_output;
 static int s_maxScale = 120;
-static int s_prevScale = 120;
+static int s_prevScale = -1;
 
 static bool s_running = true;
 static int s_width, s_height;

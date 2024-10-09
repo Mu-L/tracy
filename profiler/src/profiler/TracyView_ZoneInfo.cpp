@@ -5,6 +5,7 @@
 #include "TracyPrint.hpp"
 #include "TracyMouse.hpp"
 #include "TracyView.hpp"
+#include "tracy_pdqsort.h"
 
 namespace tracy
 {
@@ -929,7 +930,25 @@ void View::DrawZoneInfoWindow()
                         SmallCheckbox( "Time relative to zone start", &m_messageTimeRelativeToZone );
                         ImGui::SameLine();
                         SmallCheckbox( "Exclude children", &m_messagesExcludeChildren );
-                        if( ImGui::BeginTable( "##messages", 2, ImGuiTableFlags_ScrollY | ImGuiTableFlags_BordersInnerV, ImVec2( 0, ImGui::GetTextLineHeightWithSpacing() * std::min<int64_t>( msgend-msgit+1, 15 ) ) ) )
+                        int64_t viewSize;
+                        if( !m_messagesExcludeChildren )
+                        {
+                            viewSize = std::min<int64_t>( msgend - msgit + 1, 15 );
+                        }
+                        else
+                        {
+                            viewSize = 0;
+                            for( auto it = msgit; it < msgend; ++it )
+                            {
+                                if( !GetZoneChild( ev, (*it)->time ) )
+                                {
+                                    viewSize++;
+                                    if( viewSize == 15 ) break;
+                                }
+                            }
+                            if( viewSize < 15 ) viewSize++;
+                        }
+                        if( ImGui::BeginTable( "##messages", 2, ImGuiTableFlags_ScrollY | ImGuiTableFlags_BordersInnerV, ImVec2( 0, ImGui::GetTextLineHeightWithSpacing() * viewSize ) ) )
                         {
                             ImGui::TableSetupScrollFreeze( 0, 1 );
                             ImGui::TableSetupColumn( "Time", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize );
@@ -952,7 +971,19 @@ void View::DrawZoneInfoWindow()
                                 ImGui::PopID();
                                 ImGui::TableNextColumn();
                                 ImGui::PushStyleColor( ImGuiCol_Text, (*msgit)->color );
-                                ImGui::TextWrapped( "%s", m_worker.GetString( (*msgit)->ref ) );
+                                const auto text = m_worker.GetString( (*msgit)->ref );
+                                auto tend = text;
+                                while( *tend != '\0' && *tend != '\n' ) tend++;
+                                const auto cw = ImGui::GetContentRegionAvail().x;
+                                const auto tw = ImGui::CalcTextSize( text, tend ).x;
+                                ImGui::TextUnformatted( text, tend );
+                                if( tw > cw && ImGui::IsItemHovered() )
+                                {
+                                    ImGui::SetNextWindowSize( ImVec2( 1000 * GetScale(), 0 ) );
+                                    ImGui::BeginTooltip();
+                                    ImGui::TextWrapped( "%s", text );
+                                    ImGui::EndTooltip();
+                                }
                                 ImGui::PopStyleColor();
                             }
                             while( ++msgit != msgend );

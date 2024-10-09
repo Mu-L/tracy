@@ -553,7 +553,7 @@ By default, the Tracy client will listen on IPv6 interfaces, falling back to IPv
 
 Things are a bit different in projects that consist of multiple DLLs/shared objects. Compiling \texttt{TracyClient.cpp} into every DLL is not an option because this would result in several instances of Tracy objects lying around in the process. We instead need to pass their instances to the different DLLs to be reused there.
 
-For that, you need a \emph{profiler DLL} to which your executable and the other DLLs link. If that doesn't exist, you have to create one explicitly for Tracy\footnote{You may also look at the \texttt{library} directory in the profiler source tree.}. This library should contain the \texttt{public/TracyClient.cpp} source file. Link the executable and all DLLs you want to profile to this DLL.
+For that, you need a \emph{profiler DLL} to which your executable and the other DLLs link. If that doesn't exist, you have to create one explicitly for Tracy\footnote{You can use the top-level Meson or CMake build scripts to get it. Make sure that the same build flags are set for both the library and your application, or you may find yourself chasing weird issues.}. This library should contain the \texttt{public/TracyClient.cpp} source file. Link the executable and all DLLs you want to profile to this DLL.
 
 If you are targeting Windows with Microsoft Visual Studio or MinGW, add the \texttt{TRACY\_IMPORTS} define to your application.
 
@@ -810,6 +810,20 @@ The build directory can be reused if you want to compile the program in the futu
 \begin{bclogo}[
 noborder=true,
 couleur=black!5,
+logo=\bcattention
+]{Caveats}
+Tracy requires network connectivity and \texttt{git} to be available during the build configuration step in order to download the necessary libraries. By default, this is done for each build directory you configure with CMake. To make this requirement more reasonable, it is recommended to set a cache directory, for example:
+
+\begin{lstlisting}[language=sh]
+export CPM_SOURCE_CACHE=~/.cache/cpm
+\end{lstlisting}
+
+With this environment variable set, the library download will be performed only once, and the cached checkouts will be used in all future CMake build directory setups, allowing offline builds. Access to the network will then only be needed if the cache directory is cleared, or if the requirements for the libraries change, for example after an upgrade to a different version of Tracy.
+\end{bclogo}
+
+\begin{bclogo}[
+noborder=true,
+couleur=black!5,
 logo=\bcbombe
 ]{Important}
 Due to the memory requirements for data storage, the Tracy server is only supposed to run on 64-bit platforms. While nothing prevents the program from building and executing in a 32-bit environment, doing so is not supported.
@@ -817,39 +831,15 @@ Due to the memory requirements for data storage, the Tracy server is only suppos
 
 \subsubsection{Required libraries}
 
-The core libraries necessary for the building of Tracy utilities are:
-
-\begin{itemize}
-\item capstone
-\item glfw
-\item freetype
-\end{itemize}
-
-The capstone library will always be downloaded from GitHub when the CMake build directory is created, unless you have it installed on your system and set the specific build option. You must have git installed for this download to work. Using the capstone library provided by package managers is not recommended, as these packages are typically slow to provide up-to-date versions of the library, and the API may be incompatible.
-
-It is recommended that you install the glfw and freetype libraries on your system so that Tracy can find them with \texttt{pkg-config}. However, if these libraries are not available, they will be downloaded from GitHub.
-
-\paragraph{Windows}
-
-There is no need to install external libraries (e.g. with vcpkg). All libraries are downloaded automatically by CMake. You still need git, though.
+In most cases it is possible to build Tracy without manually installing additional libraries. All requirements are automatically downloaded by CMake.
 
 \paragraph{Unix}
 
-On Unix systems (including Linux), you will need to install the \texttt{pkg-config} utility to provide information about libraries.
+On Unix systems, such as Linux or macOS, it is possible to link with certain common system libraries to reduce build times and resource usage through shared objects. This is optional and will be done automatically if all requirements are met. If it's not possible, there is no loss of functionality as Tracy will build and statically link these libraries anyway.
 
-Due to some questionable design decisions by the compiler developers, you will most likely also need the \texttt{tbb} library\footnote{Technically, this is not a Tracy dependency, but rather a \texttt{libstdc++} dependency, but it may still not be installed by default.}. If not found, this library is downloaded automatically.
+You will need to install the \texttt{pkg-config} utility to provide information about libraries. Then you will need to install \texttt{freetype} and \texttt{glfw} libraries.
 
 Installation of the libraries on OSX can be facilitated using the \texttt{brew} package manager.
-
-\paragraph{Linux}
-
-There are some Linux-specific libraries that you need to have installed on your system. These won't be downloaded automatically.
-
-For XDG Portal support in the file selector, you need to install the \texttt{dbus} library. If you're one of those weird people who doesn't like modern things, you can install \texttt{gtk3} instead and force the GTK file selector with a build option.
-
-Linux builds of Tracy use the Wayland protocol by default, which allows proper support for Hi-DPI scaling and high-precision input devices such as touchpads. As such, the \texttt{glfw} library is no longer needed, but you will need to install \texttt{libxkbcommon}, \texttt{wayland}, \texttt{wayland-protocols}, \texttt{libglvnd} (or \texttt{libegl} on some distributions).
-
-If you want to use X11 instead, you can enable the \texttt{LEGACY} option in CMake build settings.
 
 \begin{bclogo}[
 noborder=true,
@@ -860,6 +850,16 @@ Some Linux distributions require you to add a \texttt{lib} prefix and a \texttt{
 
 Some Linux distributions ship outdated versions of libraries that are too old for Tracy to build, and do not provide new versions by design. Please reconsider your choice of distribution in this case, as the only function of a Linux distribution is to provide packages, and the one you have chosen is clearly failing at this task.
 \end{bclogo}
+
+\paragraph{Linux}
+
+There are some Linux-specific libraries that you need to have installed on your system. These won't be downloaded automatically.
+
+For XDG Portal support in the file selector, you need to install the \texttt{dbus} library (and a portal appropriate for your desktop environment). If you're one of those weird people who doesn't like modern things, you can install \texttt{gtk3} instead and force the GTK file selector with a build option.
+
+Linux builds of Tracy use the Wayland protocol by default, which allows proper support for Hi-DPI scaling, high-precision input devices such as touchpads, proper handling of mouse cursors, and so on. As such, the \texttt{glfw} library is no longer needed, but you will need to install \texttt{libxkbcommon}, \texttt{wayland}, \texttt{wayland-protocols}, \texttt{libglvnd} (or \texttt{libegl} on some distributions).
+
+If you want to use X11 instead, you can enable the \texttt{LEGACY} option in CMake build settings. Going this way is discouraged.
 
 \begin{bclogo}[
 noborder=true,
@@ -2913,11 +2913,12 @@ The main profiler window is split into three sections, as seen in figure~\ref{ma
 \draw (0, 0) rectangle (16.1, -5.5);
 \draw[pattern=crosshatch dots] (0, 0) rectangle+(16.1, 0.3);
 \draw[rounded corners=5pt] (0.1, -0.1) rectangle+(0.5, -0.5) node [midway] {\faPowerOff};
-\draw[rounded corners=5pt] (0.7, -0.1) rectangle+(1.8, -0.5) node [midway] {\faCog{} Options};
-\draw[rounded corners=5pt] (2.6, -0.1) rectangle+(2.2, -0.5) node [midway] {\faTags{} Messages};
-\draw[rounded corners=5pt] (4.9, -0.1) rectangle+(2.1, -0.5) node [midway] {\faSearch{} Find zone};
-\draw[rounded corners=5pt] (7.1, -0.1) rectangle+(2, -0.5) node [midway] {\faSortAmountUp{} Statistics};
-\draw[rounded corners=5pt] (9.2, -0.1) rectangle+(2, -0.5) node [midway] {\faMemory{} Memory};
+\draw[rounded corners=5pt] (0.7, -0.1) rectangle+(0.5, -0.5) node [midway] {\faCog{}};
+\draw[rounded corners=5pt] (1.3, -0.1) rectangle+(2.2, -0.5) node [midway] {\faTags{} Messages};
+\draw[rounded corners=5pt] (3.6, -0.1) rectangle+(1.5, -0.5) node [midway] {\faSearch{} Find};
+\draw[rounded corners=5pt] (5.2, -0.1) rectangle+(2, -0.5) node [midway] {\faSortAmountUp{} Statistics};
+\draw[rounded corners=5pt] (7.3, -0.1) rectangle+(1.6, -0.5) node [midway] {\faFire{} Flame};
+\draw[rounded corners=5pt] (9.0, -0.1) rectangle+(2.2, -0.5) node [midway] {\faMemory{} Memory};
 \draw[rounded corners=5pt] (11.3, -0.1) rectangle+(2.1, -0.5) node [midway] {\faBalanceScale{} Compare};
 \draw[rounded corners=5pt] (13.5, -0.1) rectangle+(1.3, -0.5) node [midway] {\faFingerprint{} Info};
 \draw[rounded corners=5pt] (14.9, -0.1) rectangle+(0.5, -0.5) node [midway] {\faTools{}};
@@ -2949,8 +2950,9 @@ The control menu (top row of buttons) provides access to various profiler featur
 \item \emph{\faSquare{} Stopped} -- Inactive button used to indicate that the client application was terminated.
 \item \emph{\faCog{} Options} -- Toggles the settings menu (section~\ref{options}).
 \item \emph{\faTags{} Messages} -- Toggles the message log window (section~\ref{messages}), which displays custom messages sent by the client, as described in section~\ref{messagelog}.
-\item \emph{\faSearch{} Find zone} -- This buttons toggles the find zone window, which allows inspection of zone behavior statistics (section~\ref{findzone}).
+\item \emph{\faSearch{} Find} -- This buttons toggles the find zone window, which allows inspection of zone behavior statistics (section~\ref{findzone}).
 \item \emph{\faSortAmountUp{} Statistics} -- Toggles the statistics window, which displays zones sorted by their total time cost (section~\ref{statistics}).
+\item \emph{\faFire{} Flame} -- Enables the flame graph window.
 \item \emph{\faMemory{} Memory} -- Various memory profiling options may be accessed here (section~\ref{memorywindow}).
 \item \emph{\faBalanceScale{} Compare} -- Toggles the trace compare window, which allows you to see the performance difference between two profiling runs (section~\ref{compare}).
 \item \emph{\faFingerprint{} Info} -- Show general information about the trace (section~\ref{traceinfo}).
@@ -3479,9 +3481,11 @@ First and foremost, the presented information is constructed from many call stac
 
 The sample statistics list symbols, not functions. These terms are similar, but not exactly the same. A symbol always has a base function that gives it its name. In most cases, a symbol will also contain a number of inlined functions. In some cases, the same function may be inlined more than once within the same symbol.
 
-The \emph{Name} column contains name of the symbol in which the sampling was done. Kernel-mode symbol samples are distinguished with the red color. Symbols containing inlined functions are listed with the number of inlined functions in parentheses and can be expanded to show all inlined functions (some functions may be hidden if the \emph{\faPuzzlePiece{}~Show all} option is disabled due to lack of sampling data). Clicking on a function name will open the sample entry call stacks window (see chapter~\ref{sampleparents})\footnote{Note that if inclusive times are displayed, listed functions will be partially or completely coming from mid-stack frames, preventing, or limiting the capability to display parent call stacks.}.
+The \emph{Name} column contains name of the symbol in which the sampling was done. Kernel-mode symbol samples are distinguished with the red color. Symbols containing inlined functions are listed with the number of inlined functions in parentheses and can be expanded to show all inlined functions (some functions may be hidden if the \emph{\faPuzzlePiece{}~Show all} option is disabled due to lack of sampling data). Clicking the \LMB{}~left mouse button on a function name will open a popup with options to select: you can either open the symbol view window (section~\ref{symbolview}), or the sample entry call stacks window (see chapter~\ref{sampleparents})\footnote{Note that if inclusive times are displayed, listed functions will be partially or completely coming from mid-stack frames, preventing, or limiting the capability to display the data.}.
 
 By default, each inlining of a function is listed separately. If you prefer to combine the measurements for functions that are inlined multiple times within a function, you can do so by enabling the \emph{\faLayerGroup{}~Aggregate} option. You cannot view sample entry call stacks of inlined functions when this grouping method is enabled.
+
+In some cases it may be more interesting to see the most time consuming inline within the symbol rather than the symbol name. If you enable the \emph{\faFire*~Top inline} option, the name of the busiest inline function will be displayed in the \emph{Name} column.
 
 If the \emph{\faSitemap{}~Inlines} option is enabled, the list will show all functions without grouping them by symbol. In this mode, inline functions are preceded by a \faCaretRight{} symbol and their parent function name is displayed in parentheses.
 

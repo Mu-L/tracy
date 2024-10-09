@@ -22,6 +22,7 @@
 #include "TracyUtility.hpp"
 #include "TracyViewData.hpp"
 #include "../server/TracyFileWrite.hpp"
+#include "../server/TracyTaskDispatch.hpp"
 #include "../server/TracyShortPtr.hpp"
 #include "../server/TracyWorker.hpp"
 #include "../server/tracy_robin_hood.h"
@@ -37,7 +38,8 @@ constexpr const char* GpuContextNames[] = {
     "OpenCL",
     "Direct3D 12",
     "Direct3D 11",
-    "Metal"
+    "Metal",
+    "Custom"
 };
 
 struct MemoryPage;
@@ -52,7 +54,6 @@ struct CpuUsageDraw;
 struct CpuCtxDraw;
 struct LockDraw;
 struct PlotDraw;
-struct FlameGraphItem;
 struct FlameGraphContext;
 
 
@@ -150,7 +151,7 @@ public:
 
     void HighlightThread( uint64_t thread );
     void ZoomToRange( int64_t start, int64_t end, bool pause = true );
-    bool DrawPlot( const TimelineContext& ctx, PlotData& plot, const std::vector<uint32_t>& plotDraw, int& offset );
+    bool DrawPlot( const TimelineContext& ctx, PlotData& plot, const std::vector<uint32_t>& plotDraw, int& offset, bool rightEnd );
     void DrawThread( const TimelineContext& ctx, const ThreadData& thread, const std::vector<TimelineDraw>& draw, const std::vector<ContextSwitchDraw>& ctxDraw, const std::vector<SamplesDraw>& samplesDraw, const std::vector<std::unique_ptr<LockDraw>>& lockDraw, int& offset, int depth, bool hasCtxSwitches, bool hasSamples );
     void DrawThreadMessagesList( const TimelineContext& ctx, const std::vector<MessagesDraw>& drawList, int offset, uint64_t tid );
     void DrawThreadOverlays( const ThreadData& thread, const ImVec2& ul, const ImVec2& dr );
@@ -275,7 +276,11 @@ private:
     void DrawSourceTooltip( const char* filename, uint32_t line, int before = 3, int after = 3, bool separateTooltip = true );
     void DrawWaitStacks();
     void DrawFlameGraph();
+    void DrawFlameGraphHeader( uint64_t timespan );
     void DrawFlameGraphItem( const FlameGraphItem& item, FlameGraphContext& ctx, uint64_t ts, int depth, bool samples );
+    void BuildFlameGraph( const Worker& worker, std::vector<FlameGraphItem>& data, const Vector<short_ptr<ZoneEvent>>& zones );
+    void BuildFlameGraph( const Worker& worker, std::vector<FlameGraphItem>& data, const Vector<short_ptr<ZoneEvent>>& zones, const ContextSwitch* ctx );
+    void BuildFlameGraph( const Worker& worker, std::vector<FlameGraphItem>& data, const Vector<SampleData>& samples );
 
     void ListMemData( std::vector<const MemEvent*>& vec, const std::function<void(const MemEvent*)>& DrawAddress, int64_t startTime = -1, uint64_t pool = 0 );
 
@@ -512,6 +517,7 @@ private:
     int m_statMode = 0;
     int m_flameMode = 0;
     bool m_flameSort = false;
+    bool m_flameRunningTime = false;
     int m_statSampleLocation = 2;
     bool m_statHideUnknown = true;
     bool m_showAllSymbols = false;
@@ -521,6 +527,7 @@ private:
     bool m_statSeparateInlines = false;
     bool m_mergeInlines = false;
     bool m_relativeInlines = false;
+    bool m_topInline = false;
     bool m_statShowAddress = false;
     bool m_statShowKernel = true;
     bool m_groupChildrenLocations = false;
@@ -893,6 +900,20 @@ private:
 
     AchievementsMgr* m_achievementsMgr;
     bool m_achievements = false;
+
+    TaskDispatch m_td;
+    std::vector<FlameGraphItem> m_flameGraphData;
+    struct
+    {
+        uint64_t count = 0;
+        uint64_t lastTime = 0;
+
+        void Reset()
+        {
+            count = 0;
+            lastTime = 0;
+        }
+    } m_flameGraphInvariant;
 };
 
 }

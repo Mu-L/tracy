@@ -54,6 +54,13 @@ if(TRACY_LIBUNWIND_BACKTRACE)
     target_link_libraries(TracyClient INTERFACE ${unwind_LINK_LIBRARIES})
 endif()
 
+if(TRACY_DEBUGINFOD)
+    include(FindPkgConfig)
+    pkg_check_modules(debuginfod REQUIRED libdebuginfod)
+    target_include_directories(TracyClient INTERFACE ${debuginfod_INCLUDE_DIRS})
+    target_link_libraries(TracyClient INTERFACE ${debuginfod_LINK_LIBRARIES})
+endif()
+
 add_library(Tracy::TracyClient ALIAS TracyClient)
 
 macro(set_option option help value)
@@ -91,6 +98,7 @@ set_option(TRACY_TIMER_FALLBACK "Use lower resolution timers" OFF)
 set_option(TRACY_LIBUNWIND_BACKTRACE "Use libunwind backtracing where supported" OFF)
 set_option(TRACY_SYMBOL_OFFLINE_RESOLVE "Instead of full runtime symbol resolution, only resolve the image path and offset to enable offline symbol resolution" OFF)
 set_option(TRACY_LIBBACKTRACE_ELF_DYNLOAD_SUPPORT "Enable libbacktrace to support dynamically loaded elfs in symbol resolution resolution after the first symbol resolve operation" OFF)
+set_option(TRACY_DEBUGINFOD "Enable debuginfod support" OFF)
 
 # advanced
 set_option(TRACY_VERBOSE "[advanced] Verbose output from the profiler" OFF)
@@ -170,19 +178,19 @@ export(TARGETS TracyClient
 install(FILES ${tracy_includes}
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tracy)
 install(FILES ${client_includes}
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/client)
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tracy/client)
 install(FILES ${common_includes}
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/common)
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tracy/common)
 install(EXPORT TracyConfig
         NAMESPACE Tracy::
         FILE TracyTargets.cmake
-        DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/Tracy)
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME})
 include(CMakePackageConfigHelpers)
 configure_package_config_file(${CMAKE_CURRENT_SOURCE_DIR}/Config.cmake.in
         "${CMAKE_CURRENT_BINARY_DIR}/TracyConfig.cmake"
-        INSTALL_DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/Tracy)
+        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME})
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/TracyConfig.cmake
-        DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/Tracy)
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME})
 
 option(TRACY_CLIENT_PYTHON "Whether to build Tracy python client library" OFF)
 

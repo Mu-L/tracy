@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.21)
 
 option(NO_FILESELECTOR "Disable the file selector" OFF)
 option(GTK_FILESELECTOR "Use the GTK file selector on Linux instead of the xdg-portal one" OFF)
@@ -6,7 +6,6 @@ option(LEGACY "Instead of Wayland, use the legacy X11 backend on Linux" OFF)
 option(NO_ISA_EXTENSIONS "Disable ISA extensions (don't pass -march=native or -mcpu=native to the compiler)" OFF)
 option(NO_STATISTICS "Disable calculation of statistics" OFF)
 option(SELF_PROFILE "Enable self-profiling" OFF)
-option(NO_PARALLEL_STL "Disable parallel STL" OFF)
 
 include(${CMAKE_CURRENT_LIST_DIR}/../cmake/version.cmake)
 
@@ -17,6 +16,11 @@ project(
     LANGUAGES C CXX
     VERSION ${TRACY_VERSION_STRING}
 )
+
+if(SELF_PROFILE)
+    add_definitions(-DTRACY_ENABLE)
+    add_compile_options(-g -O3 -fno-omit-frame-pointer)
+endif()
 
 include(${CMAKE_CURRENT_LIST_DIR}/../cmake/config.cmake)
 include(${CMAKE_CURRENT_LIST_DIR}/../cmake/vendor.cmake)
@@ -82,7 +86,6 @@ set(SERVER_FILES
 list(TRANSFORM SERVER_FILES PREPEND "src/profiler/")
 
 set(PROFILER_FILES
-    src/imgui/imgui_impl_opengl3.cpp
     src/ConnectionHistory.cpp
     src/Filters.cpp
     src/Fonts.cpp
@@ -152,7 +155,7 @@ elseif(EMSCRIPTEN)
 else()
     set(PROFILER_FILES ${PROFILER_FILES}
         src/BackendGlfw.cpp
-        src/imgui/imgui_impl_glfw.cpp
+        ${ImGui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
     )
 endif()
 
@@ -160,9 +163,6 @@ include_directories(${INCLUDES})
 link_libraries(${LIBS})
 
 if(SELF_PROFILE)
-    add_definitions(-DTRACY_ENABLE)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -O3 -fno-omit-frame-pointer")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -O3 -fno-omit-frame-pointer")
     set(PROFILER_FILES ${PROFILER_FILES}
         ../public/TracyClient.cpp
     )
@@ -204,6 +204,7 @@ if(EMSCRIPTEN)
     file(DOWNLOAD https://share.nereid.pl/i/embed.tracy ${CMAKE_CURRENT_BINARY_DIR}/embed.tracy EXPECTED_MD5 ca0fa4f01e7b8ca5581daa16b16c768d)
     file(COPY ${CMAKE_CURRENT_LIST_DIR}/wasm/index.html DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
     file(COPY ${CMAKE_CURRENT_LIST_DIR}/wasm/httpd.py DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+    file(COPY_FILE ${CMAKE_CURRENT_LIST_DIR}/../icon/icon.svg ${CMAKE_CURRENT_BINARY_DIR}/favicon.svg)
 endif()
 
 install(TARGETS ${PROJECT_NAME} DESTINATION ${CMAKE_INSTALL_BINDIR})

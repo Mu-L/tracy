@@ -37,6 +37,7 @@
 #include "TracySort.hpp"
 #include "TracyTaskDispatch.hpp"
 #include "TracyWorker.hpp"
+#include "tracy_pdqsort.h"
 
 namespace tracy
 {
@@ -1552,12 +1553,13 @@ Worker::Worker( FileRead& f, EventType::Type eventMask, bool bgTasks, bool allow
             m_data.symbolLoc[symIdx++] = SymbolLocation { symAddr, size.Val() };
         }
     }
-#ifdef NO_PARALLEL_SORT
+
+#ifdef __EMSCRIPTEN__
     pdqsort_branchless( m_data.symbolLoc.begin(), m_data.symbolLoc.end(), [] ( const auto& l, const auto& r ) { return l.addr < r.addr; } );
     pdqsort_branchless( m_data.symbolLocInline.begin(), m_data.symbolLocInline.end() );
 #else
-    std::sort( std::execution::par_unseq, m_data.symbolLoc.begin(), m_data.symbolLoc.end(), [] ( const auto& l, const auto& r ) { return l.addr < r.addr; } );
-    std::sort( std::execution::par_unseq, m_data.symbolLocInline.begin(), m_data.symbolLocInline.end() );
+    ppqsort::sort( ppqsort::execution::par, m_data.symbolLoc.begin(), m_data.symbolLoc.end(), [] ( const auto& l, const auto& r ) { return l.addr < r.addr; } );
+    ppqsort::sort( ppqsort::execution::par, m_data.symbolLocInline.begin(), m_data.symbolLocInline.end() );
 #endif
 
     f.Read( sz );
@@ -3844,7 +3846,7 @@ void Worker::AddSymbolCode( uint64_t ptr, const char* data, size_t sz )
         rval = cs_open( CS_ARCH_ARM, CS_MODE_ARM, &handle );
         break;
     case CpuArchArm64:
-        rval = cs_open( CS_ARCH_ARM64, CS_MODE_ARM, &handle );
+        rval = cs_open( CS_ARCH_AARCH64, CS_MODE_ARM, &handle );
         break;
     default:
         assert( false );
@@ -3888,9 +3890,9 @@ void Worker::AddSymbolCode( uint64_t ptr, const char* data, size_t sz )
                         }
                         break;
                     case CpuArchArm64:
-                        if( detail.arm64.op_count == 1 && detail.arm64.operands[0].type == ARM64_OP_IMM )
+                        if( detail.aarch64.op_count == 1 && detail.aarch64.operands[0].type == AARCH64_OP_IMM )
                         {
-                            callAddr = (uint64_t)detail.arm64.operands[0].imm;
+                            callAddr = (uint64_t)detail.aarch64.operands[0].imm;
                         }
                         break;
                     default:
@@ -4155,10 +4157,10 @@ void Worker::DoPostponedSymbols()
 {
     if( m_data.newSymbolsIndex >= 0 )
     {
-#ifdef NO_PARALLEL_SORT
+#ifdef __EMSCRIPTEN__
         pdqsort_branchless( m_data.symbolLoc.begin() + m_data.newSymbolsIndex, m_data.symbolLoc.end(), [] ( const auto& l, const auto& r ) { return l.addr < r.addr; } );
 #else
-        std::sort( std::execution::par_unseq, m_data.symbolLoc.begin() + m_data.newSymbolsIndex, m_data.symbolLoc.end(), [] ( const auto& l, const auto& r ) { return l.addr < r.addr; } );
+        ppqsort::sort( ppqsort::execution::par, m_data.symbolLoc.begin() + m_data.newSymbolsIndex, m_data.symbolLoc.end(), [] ( const auto& l, const auto& r ) { return l.addr < r.addr; } );
 #endif
         const auto ms = std::lower_bound( m_data.symbolLoc.begin(), m_data.symbolLoc.begin() + m_data.newSymbolsIndex, m_data.symbolLoc[m_data.newSymbolsIndex], [] ( const auto& l, const auto& r ) { return l.addr < r.addr; } );
         std::inplace_merge( ms, m_data.symbolLoc.begin() + m_data.newSymbolsIndex, m_data.symbolLoc.end(), [] ( const auto& l, const auto& r ) { return l.addr < r.addr; } );
@@ -4170,10 +4172,10 @@ void Worker::DoPostponedInlineSymbols()
 {
     if( m_data.newInlineSymbolsIndex >= 0 )
     {
-#ifdef NO_PARALLEL_SORT
+#ifdef __EMSCRIPTEN__
         pdqsort_branchless( m_data.symbolLocInline.begin() + m_data.newInlineSymbolsIndex, m_data.symbolLocInline.end() );
 #else
-        std::sort( std::execution::par_unseq, m_data.symbolLocInline.begin() + m_data.newInlineSymbolsIndex, m_data.symbolLocInline.end() );
+        ppqsort::sort( ppqsort::execution::par, m_data.symbolLocInline.begin() + m_data.newInlineSymbolsIndex, m_data.symbolLocInline.end() );
 #endif
         const auto ms = std::lower_bound( m_data.symbolLocInline.begin(), m_data.symbolLocInline.begin() + m_data.newInlineSymbolsIndex, m_data.symbolLocInline[m_data.newInlineSymbolsIndex] );
         std::inplace_merge( ms, m_data.symbolLocInline.begin() + m_data.newInlineSymbolsIndex, m_data.symbolLocInline.end() );
@@ -7017,10 +7019,10 @@ void Worker::CreateMemAllocPlot( MemData& memdata )
 
 void Worker::ReconstructMemAllocPlot( MemData& mem )
 {
-#ifdef NO_PARALLEL_SORT
+#ifdef __EMSCRIPTEN__
     pdqsort_branchless( mem.frees.begin(), mem.frees.end(), [&mem] ( const auto& lhs, const auto& rhs ) { return mem.data[lhs].TimeFree() < mem.data[rhs].TimeFree(); } );
 #else
-    std::sort( std::execution::par_unseq, mem.frees.begin(), mem.frees.end(), [&mem] ( const auto& lhs, const auto& rhs ) { return mem.data[lhs].TimeFree() < mem.data[rhs].TimeFree(); } );
+    ppqsort::sort( ppqsort::execution::par, mem.frees.begin(), mem.frees.end(), [&mem] ( const auto& lhs, const auto& rhs ) { return mem.data[lhs].TimeFree() < mem.data[rhs].TimeFree(); } );
 #endif
 
     const auto psz = mem.data.size() + mem.frees.size() + 1;
@@ -7962,10 +7964,10 @@ void Worker::Write( FileWrite& f, bool fiDict )
         }
         if( m_inconsistentSamples )
         {
-#ifdef NO_PARALLEL_SORT
+#ifdef __EMSCRIPTEN__
             pdqsort_branchless( thread->samples.begin(), thread->samples.end(), [] ( const auto& lhs, const auto& rhs ) { return lhs.time.Val() < rhs.time.Val(); } );
 #else
-            std::sort( std::execution::par_unseq, thread->samples.begin(), thread->samples.end(), [] ( const auto& lhs, const auto& rhs ) { return lhs.time.Val() < rhs.time.Val(); } );
+            ppqsort::sort( ppqsort::execution::par, thread->samples.begin(), thread->samples.end(), [] ( const auto& lhs, const auto& rhs ) { return lhs.time.Val() < rhs.time.Val(); } );
 #endif
         }
         sz = thread->samples.size();
