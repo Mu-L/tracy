@@ -158,12 +158,13 @@ void CaptureThread( ClientSession* session, const std::string& address, uint16_t
     {
         auto& lock = worker.GetMbpsDataLock();
         lock.lock();
-        float mbps = worker.GetMbpsData().back();
-        int64_t txTotal = worker.GetDataTransferred();
+        const auto& mbpsData = worker.GetMbpsData();
+        if( !mbpsData.empty() )
+        {
+            session->stats.mbps = mbpsData.back();
+            session->stats.txBytes = worker.GetDataTransferred();
+        }
         lock.unlock();
-        
-        session->stats.mbps = mbps;
-        session->stats.txBytes = txTotal;
         session->stats.memUsage = tracy::memUsage.load( std::memory_order_relaxed );
         
         std::this_thread::sleep_for( std::chrono::milliseconds( 100 ) );
