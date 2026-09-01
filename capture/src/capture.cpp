@@ -19,6 +19,7 @@
 #include "../../public/common/TracyVersion.hpp"
 #include "GitRef.hpp"
 #include "CaptureFileBackup.hpp"
+#include "CaptureConsole.hpp"
 
 #include "CaptureOutput.hpp"
 

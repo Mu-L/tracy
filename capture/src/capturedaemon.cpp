@@ -28,6 +28,7 @@
 #include "../../server/TracyWorker.hpp"
 #include "GitRef.hpp"
 
+#include "CaptureConsole.hpp"
 #include "CaptureOutput.hpp"
 
 static std::atomic<bool> g_shutdown{false};
