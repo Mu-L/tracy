@@ -166,7 +166,13 @@ void PrintCaptureProgress( tracy::Worker& worker, int64_t firstTime, int64_t mem
 
     auto& lock = worker.GetMbpsDataLock();
     lock.lock();
-    const auto mbps = worker.GetMbpsData().back();
+    const auto& mbpsData = worker.GetMbpsData();
+    if( mbpsData.empty() )
+    {
+        lock.unlock();
+        return;
+    }
+    const auto mbps = mbpsData.back();
     const auto compRatio = worker.GetCompRatio();
     const auto netTotal = worker.GetDataTransferred();
     const auto queueSize = worker.GetSendQueueSize();
