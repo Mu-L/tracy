@@ -3331,6 +3331,8 @@ Each client is captured to a separate file in the output directory, named accord
 
 Press \keys{\ctrl + C} to stop discovery and gracefully shut down all active captures. Each capture thread will finish writing its trace file before the daemon exits.
 
+The daemon locks the output directory and refuses to start if a running daemon already owns it, so only one daemon can write to a given directory at a time.
+
 \subsection{External monitoring}
 \label{externalmonitoring}
 
