@@ -18,6 +18,7 @@
 #include "TracyImGui.hpp"
 #include "TracyManualData.hpp"
 #include "TracyPrint.hpp"
+#include "TracySafeFileWrite.hpp"
 #include "TracySourceView.hpp"
 #include "TracyTexture.hpp"
 #include "TracyView.hpp"
@@ -1487,7 +1488,7 @@ bool View::DrawSourceTooltip( const char* filename, uint32_t lineStart, uint32_t
 
 bool View::Save( const char* fn, FileCompression comp, int zlevel, bool buildDict, int streams )
 {
-    std::unique_ptr<FileWrite> f( FileWrite::Open( fn, comp, zlevel, streams ) );
+    std::unique_ptr<SafeFileWrite> f( SafeFileWrite::Open( fn, comp, zlevel, streams ) );
     if( !f ) return false;
 
     m_filename = fn;
@@ -1498,11 +1499,12 @@ bool View::Save( const char* fn, FileCompression comp, int zlevel, bool buildDic
     m_saveThreadState.store( SaveThreadState::Saving, std::memory_order_relaxed );
     m_saveThread = std::thread( [this, f{std::move( f )}, buildDict] {
         Worker::MainThreadDataLockGuard lock = m_worker.ObtainLockForMainThread();
-        m_worker.Write( *f, buildDict );
-        f->Finish();
+        m_worker.Write( f->File(), buildDict );
+        f->File().Finish();
         const auto stats = f->GetCompressionStatistics();
         m_srcFileBytes.store( stats.first, std::memory_order_relaxed );
         m_dstFileBytes.store( stats.second, std::memory_order_relaxed );
+        f->Commit();
         m_saveThreadState.store( SaveThreadState::NeedsJoin, std::memory_order_release );
     } );
 
