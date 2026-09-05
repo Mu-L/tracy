@@ -358,6 +358,7 @@ int main( int argc, char** argv )
     std::filesystem::create_directories( outputDir );
     
     InitTerminalDetection();
+#ifndef _WIN32
     g_lockFile = outputDir + "/.tracy-capture-daemon.lock";
     {
         int lockFd = -1;
@@ -390,15 +391,12 @@ int main( int argc, char** argv )
             fprintf( stderr, "Error: Another capture daemon is already using the output directory %s\n", outputDir.c_str() );
             return 1;
         }
-#ifdef _WIN32
-        const std::string pid = std::to_string( _getpid() );
-#else
         const std::string pid = std::to_string( getpid() );
-#endif
         write( lockFd, pid.c_str(), pid.size() );
         close( lockFd );
     }
     atexit( RemoveLockFile );
+#endif
 #ifdef _WIN32
     signal( SIGINT, SigInt );
 #else
