@@ -3364,6 +3364,8 @@ The following options are also available:
 \begin{itemize}
 \item \texttt{-{}-hz N} -- sampling frequency in Hz (default: 10000, range 1--1000000).
 \item \texttt{-{}-port N} -- the port on which the monitor accepts connections from the profiler (default: 8086).
+\item \texttt{-o, -{}-output FILE} -- save the trace to a file when the capture ends. While capturing, the monitor acts as the Tracy server itself, so the profiler cannot connect to it.
+\item \texttt{-f, -{}-force} -- overwrite the output file if it already exists.
 \end{itemize}
 
 After starting, the monitor prints a short report listing the data sources that are actually active in your environment (sampling rate, kernel frames, context switches, hardware sampling statistics, power, vsync), together with the reason for any that are unavailable.
