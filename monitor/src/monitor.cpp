@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <memory>
 #include <sys/ioctl.h>
 #include <linux/perf_event.h>
 #include <netinet/in.h>
@@ -29,6 +30,9 @@
 #include "../public/common/TracyVersion.hpp"
 #include "../public/client/TracyCallstack.hpp"
 #include "GitRef.hpp"
+
+#include "../../server/TracyWorker.hpp"
+#include "../../util/CaptureConsole.hpp"
 
 // The monitor is only meaningful with the client's full sampling +
 // symbolication stack. These configurations would either fail to build
@@ -374,7 +378,7 @@ static const char* TracepointReason( TracepointStatus status )
     }
 }
 
-static void PrintStartupReport( bool kernelFrames, bool hwStats, int hwErrno )
+static void PrintStartupReport( bool kernelFrames, bool hwStats, int hwErrno, const char* output )
 {
     const TracepointStatus ctxSwitches = CheckSystemWideTracepoint( "/events/sched/sched_switch" );
     const TracepointStatus vsync = CheckSystemWideTracepoint( "/events/drm/drm_vblank_event" );
@@ -413,8 +417,71 @@ static void PrintStartupReport( bool kernelFrames, bool hwStats, int hwErrno )
     printf( "  recording:                     on-demand: samples are captured only while a Tracy server is connected; pre-connection samples are discarded\n" );
 #endif
     printf( "\n" );
-    printf( "Open the Tracy profiler and connect to this host:port (or it will auto-discover).\n" );
+    if( !output )
+    {
+        printf( "Open the Tracy profiler and connect to this host:port (or it will auto-discover).\n" );
+    }
     fflush( stdout );
+}
+
+// --- trace saving ---------------------------------------------------------------
+
+// No-op until the worker's first rate sample arrives and when stdout is not a terminal.
+static void PrintProgress( tracy::Worker* worker )
+{
+    if( !worker || !worker->HasData() ) return;
+    PrintCaptureProgress( *worker, worker->GetFirstTime(), -1 );
+}
+
+// True when the status line actually occupies the current line, so that a
+// newline is needed to terminate it. PrintCaptureProgress skips rendering
+// until the first rate sample arrives, and printing a bare "\n" then would
+// add a stray blank line.
+static bool ProgressLineActive( tracy::Worker* worker )
+{
+    if( !worker || !IsTerminal() ) return false;
+    auto& lock = worker->GetMbpsDataLock();
+    lock.lock();
+    const bool active = !worker->GetMbpsData().empty();
+    lock.unlock();
+    return active;
+}
+
+static bool WaitForWorker( tracy::Worker& worker, const char** reasonOut )
+{
+    *reasonOut = nullptr;
+    for( int i = 0; i < 100; i++ )
+    {
+        if( worker.HasData() ) return true;
+        if( s_shouldQuit )
+        {
+            *reasonOut = "interrupted before the capture started";
+            return false;
+        }
+        const auto hs = worker.GetHandshakeStatus();
+        if( hs != tracy::HandshakePending )
+        {
+            // the first connection was made and rejected or dropped; the worker
+            // never reconnects, so this outcome is final
+            switch( (tracy::HandshakeStatus)hs )
+            {
+            case tracy::HandshakeProtocolMismatch:
+                *reasonOut = "the client rejected the protocol version (the client and the worker come from the same build; this should not happen)";
+                break;
+            case tracy::HandshakeNotAvailable:
+                *reasonOut = "another server (e.g. the Tracy profiler GUI) is already connected to the client, and the client serves only one server at a time";
+                break;
+            default:
+                *reasonOut = "the client dropped the connection during the handshake";
+                break;
+            }
+            return false;
+        }
+        PrintProgress( &worker );
+        usleep( 100000 );
+    }
+    *reasonOut = "the worker did not connect to the client within 10 seconds";
+    return false;
 }
 
 // --- attach mode ---------------------------------------------------------------
@@ -463,7 +530,7 @@ static bool VerifyClientListening()
     }
     return false;
 }
-static int RunAttached( pid_t pid )
+static int RunAttached( pid_t pid, const char* output )
 {
     if( kill( pid, 0 ) != 0 )
     {
@@ -519,13 +586,32 @@ static int RunAttached( pid_t pid )
         return 1;
     }
 
-    PrintStartupReport( kernelFrames, hwStats, hwErrno );
+    PrintStartupReport( kernelFrames, hwStats, hwErrno, output );
+
+    // The worker is created only after the client started: the worker's threads
+    // name themselves via the client's SetThreadName(), which requires the client
+    // to be up (the monitor runs it with TRACY_MANUAL_LIFETIME).
+    std::unique_ptr<tracy::Worker> worker;
+    if( output )
+    {
+        worker = std::make_unique<tracy::Worker>( "127.0.0.1", (uint16_t)EffectivePort(), -1 );
+        const char* reason = nullptr;
+        if( !WaitForWorker( *worker, &reason ) )
+        {
+            fprintf( stderr, "Cannot capture to %s: %s.\n", output, reason );
+            tracy::ShutdownProfiler();
+            return 1;
+        }
+    }
 
     // never signal the target: attach mode must leave it running when we quit
     while( !s_shouldQuit && ProcessIsAlive( pid ) )
     {
+        PrintProgress( worker.get() );
         usleep( 100000 );  // 100ms poll
     }
+
+    if( ProgressLineActive( worker.get() ) ) printf( "\n" );  // terminate the status line
 
     if( s_shouldQuit )
     {
@@ -542,7 +628,7 @@ static int RunAttached( pid_t pid )
 
 // --- launch mode ---------------------------------------------------------------
 
-static int RunForked( int argc, char** argv )
+static int RunForked( int argc, char** argv, const char* output )
 {
     pid_t childPid = fork();
     if( childPid < 0 )
@@ -703,7 +789,22 @@ static int RunForked( int argc, char** argv )
         return 1;
     }
 
-    PrintStartupReport( kernelFrames, hwStats, hwErrno );
+    PrintStartupReport( kernelFrames, hwStats, hwErrno, output );
+
+    std::unique_ptr<tracy::Worker> worker;
+    if( output )
+    {
+        worker = std::make_unique<tracy::Worker>( "127.0.0.1", (uint16_t)EffectivePort(), -1 );
+        const char* reason = nullptr;
+        if( !WaitForWorker( *worker, &reason ) )
+        {
+            fprintf( stderr, "Cannot capture to %s: %s.\n", output, reason );
+            kill( childPid, SIGKILL );
+            waitpid( childPid, nullptr, 0 );
+            tracy::ShutdownProfiler();
+            return 1;
+        }
+    }
 
     // Wait for child to exit, or for a signal
     for(;;)
@@ -730,8 +831,11 @@ static int RunForked( int argc, char** argv )
             // Child already gone
             break;
         }
+        PrintProgress( worker.get() );
         usleep( 100000 );
     }
+
+    if( ProgressLineActive( worker.get() ) ) printf( "\n" );  // terminate the status line
 
     if( s_shouldQuit && ProcessIsAlive( childPid ) )
     {
@@ -767,13 +871,16 @@ static void PrintUsage( const char* progName )
     printf( "       %s [OPTIONS] -n NAME\n", progName );
     printf( "\n" );
     printf( "Options:\n" );
-    printf( "  -p, --pid PID    Attach to an existing process (PID)\n" );
-    printf( "  -n, --name NAME  Attach to an existing process by name; the name is the\n" );
-    printf( "                   /proc/<pid>/comm value, truncated to 15 characters. If\n" );
-    printf( "                   several processes match, their PIDs are listed; use -p.\n" );
-    printf( "  --hz N           Sampling frequency in Hz (default 10000, range 1..1000000)\n" );
-    printf( "  --port N         Listen port for Tracy servers (default 8086)\n" );
-    printf( "  -h, --help       Show this help message\n" );
+    printf( "  -p, --pid PID      Attach to an existing process (PID)\n" );
+    printf( "  -n, --name NAME    Attach to an existing process by name; the name is the\n" );
+    printf( "                     /proc/<pid>/comm value, truncated to 15 characters. If\n" );
+    printf( "                     several processes match, their PIDs are listed; use -p.\n" );
+    printf( "  --hz N             Sampling frequency in Hz (default 10000, range 1..1000000)\n" );
+    printf( "  --port N           Listen port for Tracy servers (default 8086)\n" );
+    printf( "  -o, --output FILE  Capture the trace in-process: the monitor acts as\n" );
+    printf( "                     the Tracy server itself, so the profiler GUI cannot\n" );
+    printf( "                     connect while the capture is in progress\n" );
+    printf( "  -h, --help         Show this help message\n" );
     printf( "\n" );
     printf( "Exit codes: 0 on success; 1 when the target cannot be profiled\n" );
     printf( "(bad option, no matching process, permission or kernel refusal);\n" );
@@ -878,6 +985,7 @@ static void ReservePortIfUnpinned()
 int main( int argc, char** argv )
 {
     auto progName = argv[0];
+    InitTerminalDetection();
 
     if( argc < 2 )
     {
@@ -934,21 +1042,23 @@ int main( int argc, char** argv )
     pid_t attachPid = 0;
     char attachName[128] = {};
     bool wantAttach = false;
+    const char* output = nullptr;
 
     enum { OptHz = 256, OptPort };
 
     static struct option longOptions[] =
     {
-        { "pid",  required_argument, nullptr, 'p' },
-        { "name", required_argument, nullptr, 'n' },
-        { "hz",   required_argument, nullptr, OptHz },
-        { "port", required_argument, nullptr, OptPort },
-        { "help", no_argument,       nullptr, 'h' },
+        { "pid",    required_argument, nullptr, 'p' },
+        { "name",   required_argument, nullptr, 'n' },
+        { "hz",     required_argument, nullptr, OptHz },
+        { "port",   required_argument, nullptr, OptPort },
+        { "output", required_argument, nullptr, 'o' },
+        { "help",   no_argument,       nullptr, 'h' },
         { nullptr, 0, nullptr, 0 }
     };
 
     int c;
-    while( ( c = getopt_long( argc, argv, "+p:n:h", longOptions, nullptr ) ) != -1 )
+    while( ( c = getopt_long( argc, argv, "+p:n:o:h", longOptions, nullptr ) ) != -1 )
     {
         switch( c )
         {
@@ -991,6 +1101,9 @@ int main( int argc, char** argv )
             setenv( "TRACY_PORT", buf, 1 );
             break;
         }
+        case 'o':
+            output = optarg;
+            break;
         case 'h':
             PrintUsage( argv[0] );
             return 0;
@@ -1016,6 +1129,7 @@ int main( int argc, char** argv )
         }
     }
     ReservePortIfUnpinned();
+
     if( wantAttach )
     {
         if( attachName[0] )
@@ -1034,7 +1148,7 @@ int main( int argc, char** argv )
                 fprintf( stderr, "\nUse -p PID to disambiguate.\n" );
                 return 1;
             }
-            return RunAttached( pids[0] );
+            return RunAttached( pids[0], output );
         }
 
         if( attachPid <= 0 )
@@ -1042,7 +1156,7 @@ int main( int argc, char** argv )
             fprintf( stderr, "Invalid PID specified.\n" );
             return 1;
         }
-        return RunAttached( attachPid );
+        return RunAttached( attachPid, output );
     }
 
     argv += optind;
@@ -1054,5 +1168,5 @@ int main( int argc, char** argv )
         return 1;
     }
 
-    return RunForked( argc, argv );
+    return RunForked( argc, argv, output );
 }
