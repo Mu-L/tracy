@@ -4,7 +4,9 @@ set(TRACY_PUBLIC_DIR ${CMAKE_CURRENT_LIST_DIR}/../public)
 
 include(${CMAKE_CURRENT_LIST_DIR}/../cmake/version.cmake)
 
-set(CMAKE_CXX_STANDARD 17)
+set(NO_STATISTICS ON)
+
+set(CMAKE_CXX_STANDARD 20)
 
 project(
     tracy-monitor
@@ -23,7 +25,10 @@ find_package(Threads REQUIRED)
 option(TRACY_ON_DEMAND "On-demand profiling: record samples only while a Tracy server is connected" OFF)
 
 include(${CMAKE_CURRENT_LIST_DIR}/../cmake/config.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/../cmake/vendor.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/../cmake/server.cmake)
 include(${CMAKE_CURRENT_LIST_DIR}/../cmake/GitRef.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/../cmake/util.cmake)
 
 set(PROGRAM_FILES
     src/monitor.cpp
@@ -42,6 +47,8 @@ if(TRACY_ON_DEMAND)
     target_compile_definitions(${PROJECT_NAME} PRIVATE TRACY_ON_DEMAND)
 endif()
 target_link_libraries(${PROJECT_NAME} PRIVATE
+    TracyServer
+    TracyUtil
     Threads::Threads
     ${CMAKE_DL_LIBS}
 )
