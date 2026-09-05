@@ -31,8 +31,11 @@
 #include "../public/client/TracyCallstack.hpp"
 #include "GitRef.hpp"
 
+#include "../../server/TracyFileWrite.hpp"
+#include "../../server/TracyPrint.hpp"
 #include "../../server/TracyWorker.hpp"
 #include "../../util/CaptureConsole.hpp"
+#include "../../util/CaptureFileBackup.hpp"
 
 // The monitor is only meaningful with the client's full sampling +
 // symbolication stack. These configurations would either fail to build
@@ -413,6 +416,10 @@ static void PrintStartupReport( bool kernelFrames, bool hwStats, int hwErrno, co
     {
         printf( "  vsync:                         no (%s)\n", TracepointReason( vsync ) );
     }
+    if( output )
+    {
+        printf( "  output:                        %s\n", output );
+    }
 #ifdef TRACY_ON_DEMAND
     printf( "  recording:                     on-demand: samples are captured only while a Tracy server is connected; pre-connection samples are discarded\n" );
 #endif
@@ -482,6 +489,55 @@ static bool WaitForWorker( tracy::Worker& worker, const char** reasonOut )
     }
     *reasonOut = "the worker did not connect to the client within 10 seconds";
     return false;
+}
+
+// All of the client's data has reached the worker by the time this runs.
+static int SaveTrace( tracy::Worker& worker, const char* output )
+{
+    // IsConnected() flips only after the last data was processed, so this
+    // also bounds the worker's own teardown.
+    while( worker.IsConnected() )
+    {
+        usleep( 100000 );
+    }
+
+    const auto failure = worker.GetFailureType();
+    if( failure != tracy::Worker::Failure::None )
+    {
+        fprintf( stderr, "Capture failure: %s\n", tracy::Worker::GetFailureString( failure ) );
+        const auto& fd = worker.GetFailureData();
+        if( !fd.message.empty() )
+        {
+            fprintf( stderr, "Context: %s\n", fd.message.c_str() );
+        }
+    }
+
+    if( !worker.HasData() )
+    {
+        fprintf( stderr, "No trace saved: the worker received no data from the client.\n" );
+        tracy::RestoreOutputBackup();
+        return 1;
+    }
+
+    printf( "Time span: %s, callstack samples: %s\n",
+        tracy::TimeToString( worker.GetLastTime() - worker.GetFirstTime() ),
+        tracy::RealToString( worker.GetCallstackSampleCount() ) );
+    printf( "Saving trace to %s...", output );
+    fflush( stdout );
+
+    auto f = std::unique_ptr<tracy::FileWrite>( tracy::FileWrite::Open( output, tracy::FileCompression::Zstd, 3, 4 ) );
+    if( !f )
+    {
+        fprintf( stderr, "\nCannot open output file %s for writing!\n", output );
+        tracy::RestoreOutputBackup();
+        return 5;
+    }
+    worker.Write( *f, false );
+    f->Finish();
+    const auto stats = f->GetCompressionStatistics();
+    printf( " done\nTrace size %s (%.2f%% ratio)\n", tracy::MemSizeToString( stats.second ), 100.f * stats.second / stats.first );
+    tracy::DiscardOutputBackup();
+    return 0;
 }
 
 // --- attach mode ---------------------------------------------------------------
@@ -599,6 +655,7 @@ static int RunAttached( pid_t pid, const char* output )
         if( !WaitForWorker( *worker, &reason ) )
         {
             fprintf( stderr, "Cannot capture to %s: %s.\n", output, reason );
+            tracy::RestoreOutputBackup();
             tracy::ShutdownProfiler();
             return 1;
         }
@@ -623,6 +680,7 @@ static int RunAttached( pid_t pid, const char* output )
     }
 
     tracy::ShutdownProfiler();
+    if( worker ) return SaveTrace( *worker, output );
     return 0;
 }
 
@@ -799,6 +857,7 @@ static int RunForked( int argc, char** argv, const char* output )
         if( !WaitForWorker( *worker, &reason ) )
         {
             fprintf( stderr, "Cannot capture to %s: %s.\n", output, reason );
+            tracy::RestoreOutputBackup();
             kill( childPid, SIGKILL );
             waitpid( childPid, nullptr, 0 );
             tracy::ShutdownProfiler();
@@ -856,6 +915,7 @@ static int RunForked( int argc, char** argv, const char* output )
     }
 
     tracy::ShutdownProfiler();
+    if( worker ) return SaveTrace( *worker, output );
     return 0;
 }
 
@@ -877,14 +937,17 @@ static void PrintUsage( const char* progName )
     printf( "                     several processes match, their PIDs are listed; use -p.\n" );
     printf( "  --hz N             Sampling frequency in Hz (default 10000, range 1..1000000)\n" );
     printf( "  --port N           Listen port for Tracy servers (default 8086)\n" );
-    printf( "  -o, --output FILE  Capture the trace in-process: the monitor acts as\n" );
-    printf( "                     the Tracy server itself, so the profiler GUI cannot\n" );
-    printf( "                     connect while the capture is in progress\n" );
+    printf( "  -o, --output FILE  Save the trace to FILE (.tracy) when the capture\n" );
+    printf( "                     ends. While capturing, the monitor acts as the Tracy\n" );
+    printf( "                     server itself, so the profiler GUI cannot connect\n" );
+    printf( "  -f, --force        Replace the output file if it exist\n" );
     printf( "  -h, --help         Show this help message\n" );
     printf( "\n" );
     printf( "Exit codes: 0 on success; 1 when the target cannot be profiled\n" );
-    printf( "(bad option, no matching process, permission or kernel refusal);\n" );
-    printf( "2 when the monitor itself fails to start the target (fork/exec/ptrace).\n" );
+    printf( "(bad option, no matching process, permission or kernel refusal) or\n" );
+    printf( "the trace cannot be saved; 2 when the monitor itself fails to start the\n" );
+    printf( "target (fork/exec/ptrace); 4 when the output file already exists\n" );
+    printf( "(use -f to overwrite); 5 when the output file cannot be opened or used.\n" );
     printf( "\n" );
     printf( "Permission requirements (perf_event_paranoid / capabilities):\n" );
     printf( "  sampling + symbolication               ptrace READ access to the target:\n" );
@@ -905,7 +968,7 @@ static void PrintUsage( const char* progName )
     printf( "\n" );
     printf( "Examples:\n" );
     printf( "  %s ./my_program arg1 arg2\n", progName );
-    printf( "  %s -n my_program\n", progName );
+    printf( "  %s -o trace.tracy -n my_program\n", progName );
     printf( "\n" );
     printf( "In launch mode the target is started under ptrace control so profiling\n" );
     printf( "begins before its first instruction; quitting the monitor terminates the\n" );
@@ -1043,6 +1106,7 @@ int main( int argc, char** argv )
     char attachName[128] = {};
     bool wantAttach = false;
     const char* output = nullptr;
+    bool overwrite = false;
 
     enum { OptHz = 256, OptPort };
 
@@ -1053,12 +1117,13 @@ int main( int argc, char** argv )
         { "hz",     required_argument, nullptr, OptHz },
         { "port",   required_argument, nullptr, OptPort },
         { "output", required_argument, nullptr, 'o' },
+        { "force",  no_argument,       nullptr, 'f' },
         { "help",   no_argument,       nullptr, 'h' },
         { nullptr, 0, nullptr, 0 }
     };
 
     int c;
-    while( ( c = getopt_long( argc, argv, "+p:n:o:h", longOptions, nullptr ) ) != -1 )
+    while( ( c = getopt_long( argc, argv, "+p:n:o:fh", longOptions, nullptr ) ) != -1 )
     {
         switch( c )
         {
@@ -1104,6 +1169,9 @@ int main( int argc, char** argv )
         case 'o':
             output = optarg;
             break;
+        case 'f':
+            overwrite = true;
+            break;
         case 'h':
             PrintUsage( argv[0] );
             return 0;
@@ -1129,6 +1197,22 @@ int main( int argc, char** argv )
         }
     }
     ReservePortIfUnpinned();
+
+    if( output )
+    {
+        const char* prepError = nullptr;
+        const auto prep = tracy::PrepareOutputFile( output, overwrite, &prepError );
+        if( prep == tracy::OutputPrep::Exists )
+        {
+            fprintf( stderr, "Output file %s already exists! Use -f to force overwrite.\n", output );
+            return 4;
+        }
+        if( prep == tracy::OutputPrep::Unusable )
+        {
+            fprintf( stderr, "Cannot use output file: %s!\n", prepError );
+            return 5;
+        }
+    }
 
     if( wantAttach )
     {
