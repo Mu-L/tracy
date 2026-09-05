@@ -146,6 +146,7 @@ def tablecaption(text):
             incap = True
             line = '_' + line[2:]
         if incap and not line.endswith('\\'):
+            line = re.sub(r' \{#[^{}]+\}$', '', line)
             out.append(line + '_')
             incap = False
             continue
